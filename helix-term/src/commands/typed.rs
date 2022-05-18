@@ -269,7 +269,7 @@ fn write_impl(
     if path.is_some() {
         let id = doc.id();
         doc.detect_language(cx.editor.syn_loader.clone());
-        let _ = cx.editor.refresh_language_server(id);
+        let _ = cx.editor.refresh_language_servers(id);
     }
 
     Ok(())
@@ -1257,7 +1257,7 @@ fn language(
     doc.detect_indent_and_line_ending();
 
     let id = doc.id();
-    cx.editor.refresh_language_server(id);
+    cx.editor.refresh_language_servers(id);
     Ok(())
 }
 

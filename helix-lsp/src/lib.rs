@@ -290,7 +290,7 @@ impl Notification {
 
 #[derive(Debug)]
 pub struct Registry {
-    inner: HashMap<LanguageId, (usize, Arc<Client>)>,
+    inner: HashMap<LanguageId, Vec<(usize, Arc<Client>)>>,
 
     counter: AtomicUsize,
     pub incoming: SelectAll<UnboundedReceiverStream<(usize, Call)>>,
@@ -312,69 +312,79 @@ impl Registry {
     }
 
     pub fn get_by_id(&self, id: usize) -> Option<&Client> {
-        self.inner
-            .values()
-            .find(|(client_id, _)| client_id == &id)
-            .map(|(_, client)| client.as_ref())
+        self.inner.values().find_map(|ls| {
+            ls.iter()
+                .find(|(client_id, _)| client_id == &id)
+                .map(|(_, client)| client.as_ref())
+        })
     }
 
-    pub fn get(&mut self, language_config: &LanguageConfiguration) -> Result<Option<Arc<Client>>> {
-        let config = match &language_config.language_server {
-            Some(config) => config,
-            None => return Ok(None),
-        };
+    pub fn get(&mut self, language_config: &LanguageConfiguration) -> Result<Vec<Arc<Client>>> {
+        let configs = &language_config.language_servers;
+
+        if configs.is_empty() {
+            return Ok(vec![]);
+        }
 
         match self.inner.entry(language_config.scope.clone()) {
-            Entry::Occupied(entry) => Ok(Some(entry.get().1.clone())),
+            Entry::Occupied(entry) => Ok(entry.get().iter().map(|(_, c)| c.clone()).collect()),
             Entry::Vacant(entry) => {
-                // initialize a new client
-                let id = self.counter.fetch_add(1, Ordering::Relaxed);
-                let (client, incoming, initialize_notify) = Client::start(
-                    &config.command,
-                    &config.args,
-                    language_config.config.clone(),
-                    &language_config.roots,
-                    id,
-                    config.timeout,
-                )?;
-                self.incoming.push(UnboundedReceiverStream::new(incoming));
-                let client = Arc::new(client);
+                let clients = configs
+                    .iter()
+                    .map(|config| {
+                        // initialize a new client
+                        let id = self.counter.fetch_add(1, Ordering::Relaxed);
+                        let (client, incoming, initialize_notify) = Client::start(
+                            &config.command,
+                            &config.args,
+                            config.config.clone(),
+                            &language_config.roots,
+                            id,
+                            config.timeout,
+                        )?;
+                        self.incoming.push(UnboundedReceiverStream::new(incoming));
+                        let client = Arc::new(client);
 
-                // Initialize the client asynchronously
-                let _client = client.clone();
-                tokio::spawn(async move {
-                    use futures_util::TryFutureExt;
-                    let value = _client
-                        .capabilities
-                        .get_or_try_init(|| {
+                        // Initialize the client asynchronously
+                        let _client = client.clone();
+                        tokio::spawn(async move {
+                            use futures_util::TryFutureExt;
+                            let value = _client
+                                .capabilities
+                                .get_or_try_init(|| {
+                                    _client
+                                        .initialize()
+                                        .map_ok(|response| response.capabilities)
+                                })
+                                .await;
+
+                            if let Err(e) = value {
+                                log::error!("failed to initialize language server: {}", e);
+                                return;
+                            }
+
+                            // next up, notify<initialized>
                             _client
-                                .initialize()
-                                .map_ok(|response| response.capabilities)
-                        })
-                        .await;
+                                .notify::<lsp::notification::Initialized>(lsp::InitializedParams {})
+                                .await
+                                .unwrap();
 
-                    if let Err(e) = value {
-                        log::error!("failed to initialize language server: {}", e);
-                        return;
-                    }
-
-                    // next up, notify<initialized>
-                    _client
-                        .notify::<lsp::notification::Initialized>(lsp::InitializedParams {})
-                        .await
-                        .unwrap();
-
-                    initialize_notify.notify_one();
-                });
-
-                entry.insert((id, client.clone()));
-                Ok(Some(client))
+                            initialize_notify.notify_one();
+                        });
+                        Ok((id, client))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let result = Ok(clients.iter().map(|(_, c)| c.clone()).collect());
+                entry.insert(clients);
+                result
             }
         }
     }
 
     pub fn iter_clients(&self) -> impl Iterator<Item = &Arc<Client>> {
-        self.inner.values().map(|(_, client)| client)
+        self.inner
+            .values()
+            .flat_map(|cs| cs.iter().map(|(_, client)| client))
     }
 }
 
