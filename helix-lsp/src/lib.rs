@@ -9,7 +9,7 @@ pub use lsp::{Position, Url};
 pub use lsp_types as lsp;
 
 use futures_util::stream::select_all::SelectAll;
-use helix_core::syntax::LanguageConfiguration;
+use helix_core::syntax::{LanguageConfiguration, LanguageServerFeatureConfiguation};
 
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 pub type Result<T> = core::result::Result<T, Error>;
-type LanguageId = String;
+type LanguageServerName = String;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -290,48 +290,53 @@ impl Notification {
 
 #[derive(Debug)]
 pub struct Registry {
-    inner: HashMap<LanguageId, Vec<(usize, Arc<Client>)>>,
-
+    inner: HashMap<LanguageServerName, Arc<Client>>,
+    syn_loader: Arc<helix_core::syntax::Loader>,
     counter: AtomicUsize,
     pub incoming: SelectAll<UnboundedReceiverStream<(usize, Call)>>,
 }
 
-impl Default for Registry {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Registry {
-    pub fn new() -> Self {
+    pub fn new(syn_loader: Arc<helix_core::syntax::Loader>) -> Self {
         Self {
             inner: HashMap::new(),
+            syn_loader,
             counter: AtomicUsize::new(0),
             incoming: SelectAll::new(),
         }
     }
 
     pub fn get_by_id(&self, id: usize) -> Option<&Client> {
-        self.inner.values().find_map(|ls| {
-            ls.iter()
-                .find(|(client_id, _)| client_id == &id)
-                .map(|(_, client)| client.as_ref())
-        })
+        self.inner
+            .values()
+            .find(|client| client.id() == id)
+            .map(|client| &**client)
+    }
+
+    pub fn get_by_name(&self, name: &str) -> Option<&Client> {
+        self.inner.get(name).map(|client| &**client)
     }
 
     pub fn get(&mut self, language_config: &LanguageConfiguration) -> Result<Vec<Arc<Client>>> {
-        let configs = &language_config.language_servers;
-
-        if configs.is_empty() {
+        let language_servers = &language_config.language_servers;
+        if language_servers.is_empty() {
             return Ok(vec![]);
         }
-
-        match self.inner.entry(language_config.scope.clone()) {
-            Entry::Occupied(entry) => Ok(entry.get().iter().map(|(_, c)| c.clone()).collect()),
-            Entry::Vacant(entry) => {
-                let clients = configs
-                    .iter()
-                    .map(|config| {
+        language_servers
+            .iter()
+            .map(|config| {
+                let name = match config {
+                    LanguageServerFeatureConfiguation::Simple(name) => name,
+                    LanguageServerFeatureConfiguation::Features { name, .. } => name,
+                };
+                match self.inner.entry(name.clone()) {
+                    Entry::Occupied(entry) => Ok(entry.get().clone()),
+                    Entry::Vacant(entry) => {
+                        let config = self
+                            .syn_loader
+                            .language_server_configs()
+                            .get(name)
+                            .ok_or(anyhow::anyhow!("Language server '{name}' not defined"))?;
                         // initialize a new client
                         let id = self.counter.fetch_add(1, Ordering::Relaxed);
                         let (client, incoming, initialize_notify) = Client::start(
@@ -340,6 +345,7 @@ impl Registry {
                             config.config.clone(),
                             &language_config.roots,
                             id,
+                            name.clone(),
                             config.timeout,
                         )?;
                         self.incoming.push(UnboundedReceiverStream::new(incoming));
@@ -371,20 +377,16 @@ impl Registry {
 
                             initialize_notify.notify_one();
                         });
-                        Ok((id, client))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                let result = Ok(clients.iter().map(|(_, c)| c.clone()).collect());
-                entry.insert(clients);
-                result
-            }
-        }
+                        entry.insert(client.clone());
+                        Ok(client)
+                    }
+                }
+            })
+            .collect()
     }
 
     pub fn iter_clients(&self) -> impl Iterator<Item = &Arc<Client>> {
-        self.inner
-            .values()
-            .flat_map(|cs| cs.iter().map(|(_, client)| client))
+        self.inner.values()
     }
 }
 
