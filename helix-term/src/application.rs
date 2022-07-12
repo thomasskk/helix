@@ -785,7 +785,7 @@ impl Application {
                         let result: Vec<_> = params
                             .items
                             .iter()
-                            .map(|item| {
+                            .filter_map(|item| {
                                 let mut config = language_server.config()?;
                                 // TODO check for scope_uri (below) necessary?
                                 // let mut config = match &item.scope_uri {
@@ -805,8 +805,11 @@ impl Application {
                                 //         .config()?,
                                 // };
                                 if let Some(section) = item.section.as_ref() {
-                                    for part in section.split('.') {
-                                        config = config.get(part)?;
+                                    // for some reason some lsps send an empty string (observed in 'vscode-eslint-language-server')
+                                    if section != "" {
+                                        for part in section.split('.') {
+                                            config = config.get(part)?;
+                                        }
                                     }
                                 }
                                 Some(config)
