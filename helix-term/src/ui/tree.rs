@@ -118,14 +118,12 @@ pub enum TreeOp<T> {
 pub struct Elem<T> {
     item: T,
     level: usize,
-    expanded: bool,
     folded: Vec<Self>,
 }
 
 impl<T: Clone> Clone for Elem<T> {
     fn clone(&self) -> Self {
         Self {
-            expanded: false,
             item: self.item.clone(),
             level: self.level,
             folded: self.folded.clone(),
@@ -138,7 +136,6 @@ impl<T> Elem<T> {
         Self {
             item,
             level,
-            expanded: false,
             folded: vec![],
         }
     }
@@ -180,7 +177,7 @@ impl<T: TreeItem> Tree<T> {
             col: 0,
             max_len: 0,
             count: 0,
-            tree_symbol_style: "ui.explore.guide".into(),
+            tree_symbol_style: "ui.explorer.guide".into(),
             pre_render: None,
             on_opened_fn: None,
             on_folded_fn: None,
@@ -474,7 +471,6 @@ impl<T: TreeItem> Tree<T> {
         self.max_len = 0;
         self.row = std::cmp::min(self.row, area.height.saturating_sub(1) as usize);
         let style = cx.editor.theme.get(&self.tree_symbol_style);
-        let line_style = cx.editor.theme.get("ui.virtual.ruler");
         let folder_style = cx.editor.theme.get("special");
         let last_item_index = self.items.len().saturating_sub(1);
         let skip = self.selected.saturating_sub(self.row);
@@ -490,10 +486,8 @@ impl<T: TreeItem> Tree<T> {
             let mut area = Rect::new(area.x, area.y + row, area.width, 1);
             let indent = if elem.level > 0 {
                 if index + skip != last_item_index {
-                    //format!("{}├─", "│ ".repeat(elem.level - 1))
                     format!("{}", "│ ".repeat(elem.level - 1))
                 } else {
-                    //format!("└─{}", "┴─".repeat(elem.level - 1))
                     format!("{}", "".repeat(elem.level - 1))
                 }
             } else {
@@ -516,13 +510,14 @@ impl<T: TreeItem> Tree<T> {
                     return;
                 }
                 if start_index == 0 {
-                    //let expanded = elem.folded.len() > 0;
+                    let mut icon_offset = 0;
                     if let Some((icon, color)) = elem.item.icon() {
                         let style = folder_style.fg(*color);
                         surface.set_string(area.x, area.y, icon, style);
+                        icon_offset = 2;
                     }
-                    surface.set_span(area.x + 2, area.y, span, area.width - 2);
-                    area = area.clip_left((span.width() - 2) as u16);
+                    surface.set_span(area.x + icon_offset, area.y, span, area.width - icon_offset);
+                    area = area.clip_left((span.width() - icon_offset as usize) as u16);
                 } else {
                     let span_width = span.width();
                     if start_index > span_width {

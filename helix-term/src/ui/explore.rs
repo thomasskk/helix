@@ -499,7 +499,7 @@ impl Explorer {
         ));
     }
 
-    fn fold_current(item: &mut FileInfo, cx: &mut Context, state: &mut State) {
+    fn fold_current(item: &mut FileInfo, _cx: &mut Context, _state: &mut State) {
         if item.path.is_dir() {
             item.expanded = false;
         }
@@ -590,7 +590,7 @@ impl Explorer {
         let preview_area = area.clip_left(side_area.width).clip_bottom(2);
         let prompt_area = area.clip_top(side_area.height);
 
-        let border_style = cx.editor.theme.get("ui.explore.border");
+        let border_style = cx.editor.theme.get("ui.explorer.border");
         let list_area = render_block(
             side_area.clip_left(1),
             surface,
