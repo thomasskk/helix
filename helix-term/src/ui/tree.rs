@@ -18,6 +18,7 @@ pub trait TreeItem: Sized {
     fn text(&self, cx: &mut Context, selected: bool, params: &mut Self::Params) -> Spans;
     fn is_child(&self, other: &Self) -> bool;
     fn cmp(&self, other: &Self) -> Ordering;
+    fn icon(&self) -> Option<(&'static str, &'static helix_view::theme::Color)>;
 
     fn filter(&self, cx: &mut Context, s: &str, params: &mut Self::Params) -> bool {
         self.text(cx, false, params)
@@ -117,12 +118,14 @@ pub enum TreeOp<T> {
 pub struct Elem<T> {
     item: T,
     level: usize,
+    expanded: bool,
     folded: Vec<Self>,
 }
 
 impl<T: Clone> Clone for Elem<T> {
     fn clone(&self) -> Self {
         Self {
+            expanded: false,
             item: self.item.clone(),
             level: self.level,
             folded: self.folded.clone(),
@@ -135,6 +138,7 @@ impl<T> Elem<T> {
         Self {
             item,
             level,
+            expanded: false,
             folded: vec![],
         }
     }
@@ -176,7 +180,7 @@ impl<T: TreeItem> Tree<T> {
             col: 0,
             max_len: 0,
             count: 0,
-            tree_symbol_style: "ui.text".into(),
+            tree_symbol_style: "ui.explore.guide".into(),
             pre_render: None,
             on_opened_fn: None,
             on_folded_fn: None,
@@ -264,6 +268,7 @@ impl<T: TreeItem> Tree<T> {
             if next_level > current_level {
                 if let Some(mut on_folded_fn) = self.on_folded_fn.take() {
                     on_folded_fn(&mut current.item, cx, params);
+
                     self.on_folded_fn = Some(on_folded_fn);
                 }
                 self.fold_current_child();
@@ -469,6 +474,8 @@ impl<T: TreeItem> Tree<T> {
         self.max_len = 0;
         self.row = std::cmp::min(self.row, area.height.saturating_sub(1) as usize);
         let style = cx.editor.theme.get(&self.tree_symbol_style);
+        let line_style = cx.editor.theme.get("ui.virtual.ruler");
+        let folder_style = cx.editor.theme.get("special");
         let last_item_index = self.items.len().saturating_sub(1);
         let skip = self.selected.saturating_sub(self.row);
         let iter = self
@@ -477,14 +484,17 @@ impl<T: TreeItem> Tree<T> {
             .skip(skip)
             .take(area.height as usize)
             .enumerate();
+
         for (index, elem) in iter {
             let row = index as u16;
             let mut area = Rect::new(area.x, area.y + row, area.width, 1);
             let indent = if elem.level > 0 {
                 if index + skip != last_item_index {
-                    format!("{}├─", "│ ".repeat(elem.level - 1))
+                    //format!("{}├─", "│ ".repeat(elem.level - 1))
+                    format!("{}", "│ ".repeat(elem.level - 1))
                 } else {
-                    format!("└─{}", "┴─".repeat(elem.level - 1))
+                    //format!("└─{}", "┴─".repeat(elem.level - 1))
+                    format!("{}", "".repeat(elem.level - 1))
                 }
             } else {
                 "".to_string()
@@ -500,14 +510,19 @@ impl<T: TreeItem> Tree<T> {
             };
             let mut start_index = self.col.saturating_sub(indent_len);
             let mut text = elem.item.text(cx, skip + index == self.selected, params);
-            self.max_len = self.max_len.max(text.width() + indent.len());
+            self.max_len = self.max_len.max(text.width() + indent.len() - 2);
             for span in text.0.iter_mut() {
                 if area.width == 0 {
                     return;
                 }
                 if start_index == 0 {
-                    surface.set_span(area.x, area.y, span, area.width);
-                    area = area.clip_left(span.width() as u16);
+                    //let expanded = elem.folded.len() > 0;
+                    if let Some((icon, color)) = elem.item.icon() {
+                        let style = folder_style.fg(*color);
+                        surface.set_string(area.x, area.y, icon, style);
+                    }
+                    surface.set_span(area.x + 2, area.y, span, area.width - 2);
+                    area = area.clip_left((span.width() - 2) as u16);
                 } else {
                     let span_width = span.width();
                     if start_index > span_width {
@@ -525,10 +540,13 @@ impl<T: TreeItem> Tree<T> {
                                 }
                             })
                             .collect();
+                        let mut cont = String::new();
+                        cont.push_str("");
+                        cont.push_str(&content);
                         surface.set_string_truncated(
                             area.x,
                             area.y,
-                            &content,
+                            &cont,
                             area.width as usize,
                             |_| span.style,
                             false,
